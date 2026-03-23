@@ -209,7 +209,9 @@ jobs:
       - name: Deploy with Ansible
         run: |
           cd deploy
-          uv run ansible-playbook -i inventory.ini playbook.yml
+          uv run ansible-playbook -i inventory.ini playbook.yml \
+            -e "ghcr_username=${{ secrets.GHCR_USERNAME }}" \
+            -e "ghcr_token=${{ secrets.GHCR_TOKEN }}"
         env:
           ANSIBLE_HOST_KEY_CHECKING: "false"
 

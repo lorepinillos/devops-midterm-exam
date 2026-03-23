@@ -126,8 +126,16 @@ jobs:
           aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
           aws-region: ${{ env.AWS_REGION }}
 
-      - name: Delete existing key pair if present
+      - name: Delete existing stack and key pair if present
         run: |
+          STACK_STATUS=$(aws cloudformation describe-stacks \
+            --stack-name ${{ env.STACK_NAME }} \
+            --query 'Stacks[0].StackStatus' \
+            --output text 2>/dev/null || echo "DOES_NOT_EXIST")
+          if [ "$STACK_STATUS" != "DOES_NOT_EXIST" ] && [ "$STACK_STATUS" != "DELETE_COMPLETE" ]; then
+            aws cloudformation delete-stack --stack-name ${{ env.STACK_NAME }}
+            aws cloudformation wait stack-delete-complete --stack-name ${{ env.STACK_NAME }}
+          fi
           if aws ec2 describe-key-pairs --key-names mock-openai-deploy-key 2>/dev/null; then
             aws ec2 delete-key-pair --key-name mock-openai-deploy-key
           fi

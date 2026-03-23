@@ -11,8 +11,6 @@ build/
 .env
 deploy/inventory.ini
 uv.lock
-# Ignore solution contents but keep directory structure
-solutions/**
-!solutions/**/
-!solutions/**/.gitkeep
+# Allow all solution files
+!solutions/**
 aws_credentials.yaml

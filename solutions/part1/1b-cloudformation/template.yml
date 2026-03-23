@@ -1,0 +1,51 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Mock OpenAI API infrastructure
+
+Parameters:
+  KeyName:
+    Type: String
+    Description: SSH key pair name
+
+Resources:
+  WebSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Allow web traffic
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+
+        # FIX 1: Missing SSH rule — without port 22 you cannot connect with Ansible
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: 0.0.0.0/0
+
+        # FIX 2: Missing port 8080 — the Mock API listens on 8080, it was never open
+        - IpProtocol: tcp
+          FromPort: 8080
+          ToPort: 8080
+          CidrIp: 0.0.0.0/0
+
+  WebServer:
+    Type: AWS::EC2::Instance
+    Properties:
+      InstanceType: t3a.small
+      ImageId: ami-0e9085e60087ce171
+      SecurityGroupIds:
+        - !Ref WebSecurityGroup
+
+      # FIX 3: Missing KeyName — without it you cannot SSH into the instance
+      KeyName: !Ref KeyName
+
+Outputs:
+  InstanceId:
+    Description: EC2 Instance ID
+    Value: !Ref WebServer
+
+  # FIX 4: Missing PublicIP output — needed to build the Ansible inventory after stack creation
+  PublicIP:
+    Description: Public IP address of the EC2 instance
+    Value: !GetAtt WebServer.PublicIp

@@ -1,11 +1,11 @@
 services:
   mock-api:
-    image: ghcr.io/oriolrius/devops-midterm-exam:v1
+    image: mock-openai-api:exam
     ports:
       - "8080:8000"
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
       interval: 10s
       timeout: 5s
       retries: 3

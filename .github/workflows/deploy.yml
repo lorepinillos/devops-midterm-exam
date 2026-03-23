@@ -1,0 +1,121 @@
+name: Deploy
+
+on:
+  workflow_dispatch:
+  release:
+    types: [published]
+
+env:
+  AWS_REGION: eu-west-1
+  STACK_NAME: mock-openai-api
+  KEY_NAME: mock-openai-deploy-key
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Create or use existing key pair
+        run: |
+          if ! aws ec2 describe-key-pairs --key-names ${{ env.KEY_NAME }} 2>/dev/null; then
+            aws ec2 create-key-pair \
+              --key-name ${{ env.KEY_NAME }} \
+              --query 'KeyMaterial' \
+              --output text > /tmp/deploy-key.pem
+          else
+            echo "${{ secrets.EC2_SSH_KEY }}" > /tmp/deploy-key.pem
+          fi
+          chmod 600 /tmp/deploy-key.pem
+
+      - name: Wait for stack if in transitional state
+        run: |
+          STACK_STATUS=$(aws cloudformation describe-stacks \
+            --stack-name ${{ env.STACK_NAME }} \
+            --query 'Stacks[0].StackStatus' \
+            --output text 2>/dev/null || echo "DOES_NOT_EXIST")
+
+          echo "Current stack status: $STACK_STATUS"
+
+          case $STACK_STATUS in
+            *_IN_PROGRESS)
+              echo "Stack is in transitional state, waiting..."
+              if [[ "$STACK_STATUS" == "DELETE_IN_PROGRESS" ]]; then
+                aws cloudformation wait stack-delete-complete --stack-name ${{ env.STACK_NAME }}
+              else
+                aws cloudformation wait stack-update-complete --stack-name ${{ env.STACK_NAME }} || \
+                aws cloudformation wait stack-create-complete --stack-name ${{ env.STACK_NAME }}
+              fi
+              ;;
+            DOES_NOT_EXIST|DELETE_COMPLETE)
+              echo "Stack does not exist, will be created"
+              ;;
+            *)
+              echo "Stack is stable, proceeding"
+              ;;
+          esac
+
+      - name: Deploy CloudFormation stack
+        run: |
+          aws cloudformation deploy \
+            --template-file infra/cloudformation.yml \
+            --stack-name ${{ env.STACK_NAME }} \
+            --parameter-overrides KeyName=${{ env.KEY_NAME }} \
+            --no-fail-on-empty-changeset
+
+      - name: Wait for EC2 instance
+        run: |
+          INSTANCE_ID=$(aws cloudformation describe-stack-resource \
+            --stack-name ${{ env.STACK_NAME }} \
+            --logical-resource-id EC2Instance \
+            --query 'StackResourceDetail.PhysicalResourceId' \
+            --output text)
+          aws ec2 wait instance-status-ok --instance-ids $INSTANCE_ID
+
+      - name: Get EC2 public IP
+        id: get-ip
+        run: |
+          IP=$(aws cloudformation describe-stacks \
+            --stack-name ${{ env.STACK_NAME }} \
+            --query 'Stacks[0].Outputs[?OutputKey==`PublicIP`].OutputValue' \
+            --output text)
+          echo "ec2_ip=$IP" >> $GITHUB_OUTPUT
+
+      - name: Create Ansible inventory
+        run: |
+          cat > deploy/inventory.ini << EOF
+          [mock-openai-api]
+          ${{ steps.get-ip.outputs.ec2_ip }} ansible_user=ubuntu ansible_ssh_private_key_file=/tmp/deploy-key.pem
+          EOF
+
+      - name: Install dependencies
+        run: uv sync --dev
+
+      - name: Install Ansible collections
+        run: uv run ansible-galaxy collection install -r deploy/requirements.yml
+
+      - name: Deploy with Ansible
+        run: |
+          cd deploy
+          uv run ansible-playbook -i inventory.ini playbook.yml
+
+      - name: Show deployment info
+        run: |
+          echo "Deployment complete!"
+          echo "Mock API:   http://${{ steps.get-ip.outputs.ec2_ip }}:8080"
+          echo "OpenWebUI:  http://${{ steps.get-ip.outputs.ec2_ip }}:80"
+
+      - name: Verify deployment
+        run: |
+          sleep 5
+          curl -s --fail http://${{ steps.get-ip.outputs.ec2_ip }}:8080/health || echo "Health check pending"
